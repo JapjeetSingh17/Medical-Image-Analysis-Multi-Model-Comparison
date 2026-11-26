@@ -181,10 +181,14 @@ def launch_gradio_demo(
             ]
             if parsed.reasoning:
                 section.append(f"- **Reasoning (`<think>`):** {parsed.reasoning}")
-            section.append(f"- **Raw Output:** {raw_resp}")
+            clean_raw = raw_resp.replace("<", "&lt;").replace(">", "&gt;")
+            section.append(f"- **Raw Output:** {clean_raw}")
             md_sections.append("\n".join(section))
 
         return "\n\n---\n\n".join(md_sections)
+
+    def on_custom_upload(img: Image.Image | None) -> str:
+        return "Custom Image (No Preset Ground Truth)" if img is not None else ""
 
     first_label = next(iter(presets))
     init_img, init_q, init_opts, init_gt = load_preset(first_label)
@@ -201,7 +205,7 @@ def launch_gradio_demo(
             model_checks = gr.CheckboxGroup(
                 choices=model_keys,
                 value=model_keys[:2],
-                label="Models to Compare (Run Sequentially on T4)",
+                label="Models to Compare (Run Sequentially)",
             )
         with gr.Row():
             img_in = gr.Image(value=init_img, type="pil", label="Medical Image")
@@ -213,6 +217,7 @@ def launch_gradio_demo(
         out_md = gr.Markdown(label="Model Comparison Output")
 
         preset_dd.change(load_preset, inputs=[preset_dd], outputs=[img_in, q_in, opts_in, gt_out])
+        img_in.upload(on_custom_upload, inputs=[img_in], outputs=[gt_out])
         run_btn.click(
             analyze_image,
             inputs=[img_in, q_in, opts_in, model_checks],
