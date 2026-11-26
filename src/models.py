@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import gc
+import json
 import os
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -125,6 +129,48 @@ def _sanitize_config(config: Any) -> Any:
     return config
 
 
+def _patch_json_file(src: Path, dest: Path) -> None:
+    """Copy a Hugging Face JSON config and fix null use_cache / flash_attention_2 fields."""
+    data = json.loads(src.read_text(encoding="utf-8"))
+    if data.get("use_cache") is None:
+        data["use_cache"] = True
+    if isinstance(data.get("text_config"), dict) and data["text_config"].get("use_cache") is None:
+        data["text_config"]["use_cache"] = True
+    if data.get("attn_implementation") == "flash_attention_2":
+        data.pop("attn_implementation", None)
+    dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _build_patched_snapshot_dir(hf_id: str, hf_token: str | None) -> str:
+    """Create a symlinked local mirror of a HF snapshot with patched config JSONs."""
+    from huggingface_hub import snapshot_download
+
+    snap_dir = Path(snapshot_download(repo_id=hf_id, token=hf_token))
+    patch_dir = Path(tempfile.mkdtemp(prefix="hf_patched_"))
+    for entry in snap_dir.iterdir():
+        target = patch_dir / entry.name
+        if entry.name in ("config.json", "generation_config.json") and entry.is_file():
+            _patch_json_file(entry, target)
+        else:
+            target.symlink_to(entry)
+    return str(patch_dir)
+
+
+def _prepare_model_source(hf_id: str, hf_token: str | None) -> tuple[str, str | None]:
+    """Return (load_path_or_id, temp_dir_to_cleanup) handling invalid HF config JSONs."""
+    from transformers import AutoConfig
+
+    proc_kwargs = {"token": hf_token} if hf_token else {}
+    try:
+        AutoConfig.from_pretrained(hf_id, **proc_kwargs)
+        return hf_id, None
+    except Exception as exc:
+        if "use_cache" not in str(exc) and "StrictDataclassFieldValidationError" not in type(exc).__name__:
+            raise
+        patched_dir = _build_patched_snapshot_dir(hf_id, hf_token)
+        return patched_dir, patched_dir
+
+
 def _load_model_with_attn_fallback(model_cls: Any, hf_id: str, **kwargs: Any) -> Any:
     """Load HF model preferring sdpa and falling back to eager for T4 compatibility."""
     for attn_impl in ("sdpa", "eager"):
@@ -143,6 +189,7 @@ class MedicalVLMRunner:
         self.hf_token = hf_token or os.environ.get("HF_TOKEN") or None
         self.model: Any = None
         self.processor: Any = None
+        self._temp_dir: str | None = None
 
     def load(self) -> None:
         """Load 4-bit quantized weights and processor into GPU VRAM."""
@@ -160,9 +207,12 @@ class MedicalVLMRunner:
 
         compute_dtype = _select_compute_dtype(self.spec.family)
         bnb_cfg = _build_bnb_config(compute_dtype)
-        proc_kwargs = {"token": self.hf_token} if self.hf_token else {}
+        model_source, self._temp_dir = _prepare_model_source(self.spec.hf_id, self.hf_token)
 
-        config = AutoConfig.from_pretrained(self.spec.hf_id, **proc_kwargs)
+        use_token = self.hf_token if model_source == self.spec.hf_id else None
+        proc_kwargs = {"token": use_token} if use_token else {}
+
+        config = AutoConfig.from_pretrained(model_source, **proc_kwargs)
         config = _sanitize_config(config)
 
         common_kwargs: dict[str, Any] = {
@@ -172,28 +222,28 @@ class MedicalVLMRunner:
             "device_map": "auto",
             "low_cpu_mem_usage": True,
         }
-        if self.hf_token:
-            common_kwargs["token"] = self.hf_token
+        if use_token:
+            common_kwargs["token"] = use_token
 
-        self.processor = AutoProcessor.from_pretrained(self.spec.hf_id, **proc_kwargs)
+        self.processor = AutoProcessor.from_pretrained(model_source, **proc_kwargs)
 
         if self.spec.family == "gemma3":
             self.model = _load_model_with_attn_fallback(
-                AutoModelForImageTextToText, self.spec.hf_id, **common_kwargs
+                AutoModelForImageTextToText, model_source, **common_kwargs
             )
         elif self.spec.family == "llava":
             self.model = _load_model_with_attn_fallback(
-                LlavaForConditionalGeneration, self.spec.hf_id, **common_kwargs
+                LlavaForConditionalGeneration, model_source, **common_kwargs
             )
         elif self.spec.family == "qwen2_vl":
             self.model = _load_model_with_attn_fallback(
-                Qwen2VLForConditionalGeneration, self.spec.hf_id, **common_kwargs
+                Qwen2VLForConditionalGeneration, model_source, **common_kwargs
             )
         elif self.spec.family == "qwen2_5_vl":
             from transformers import Qwen2_5_VLForConditionalGeneration
 
             self.model = _load_model_with_attn_fallback(
-                Qwen2_5_VLForConditionalGeneration, self.spec.hf_id, **common_kwargs
+                Qwen2_5_VLForConditionalGeneration, model_source, **common_kwargs
             )
         else:
             raise ValueError(f"Unsupported model family: {self.spec.family}")
@@ -299,6 +349,9 @@ class MedicalVLMRunner:
 
         self.model = None
         self.processor = None
+        if self._temp_dir:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+            self._temp_dir = None
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

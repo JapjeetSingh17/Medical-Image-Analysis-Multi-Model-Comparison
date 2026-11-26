@@ -255,3 +255,26 @@ def test_sanitize_config_and_gemma3_dtype() -> None:
     parsed = parse_model_response(gemma_raw, {"A": "Normal", "B": "Pneumonia"})
     assert parsed.predicted_letter == "B"
     assert "Pneumonia infiltrate" in parsed.reasoning
+
+
+def test_patch_json_file_fixes_null_use_cache(tmp_path: Path) -> None:
+    from src.models import _patch_json_file
+
+    src = tmp_path / "config.json"
+    dest = tmp_path / "patched_config.json"
+    src.write_text(
+        json.dumps(
+            {
+                "model_type": "qwen2_vl",
+                "use_cache": None,
+                "attn_implementation": "flash_attention_2",
+                "text_config": {"use_cache": None},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _patch_json_file(src, dest)
+    out = json.loads(dest.read_text(encoding="utf-8"))
+    assert out["use_cache"] is True
+    assert out["text_config"]["use_cache"] is True
+    assert "attn_implementation" not in out
