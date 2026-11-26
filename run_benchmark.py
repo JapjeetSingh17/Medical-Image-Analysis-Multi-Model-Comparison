@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +15,15 @@ from tqdm import tqdm
 
 from src.demo_app import generate_static_demo_cards
 from src.evaluate import evaluate_all_models
-from src.models import MODEL_REGISTRY, MedicalVLMRunner
+from src.models import CUDA_DEFAULT_MODELS, MLX_DEFAULT_MODELS, MODEL_REGISTRY, MedicalVLMRunner
 from src.parser import parse_model_response
 from src.plot_results import generate_all_charts
 from src.prepare_dataset import build_benchmark_dataset
+
+
+def _is_apple_silicon() -> bool:
+    """Return True on Apple Silicon Macs where MLX should be used by default."""
+    return platform.system() == "Darwin" and platform.machine() == "arm64"
 
 
 def _t4_without_bf16() -> bool:
@@ -119,7 +125,7 @@ def run_benchmark(
                 options = json.loads(row["options_json"])
                 img = Image.open(row["image_path"]).convert("RGB")
                 raw_resp, latency = runner.predict_mc(
-                    img, str(row["question"]), options
+                    img, str(row["question"]), options, image_path=row["image_path"]
                 )
                 parsed = parse_model_response(raw_resp, options)
 
@@ -159,13 +165,19 @@ def main() -> None:
         default=None,
         choices=list(MODEL_REGISTRY.keys()),
     )
+    parser.add_argument("--backend", choices=["auto", "mlx", "cuda"], default="auto")
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--hf-token", type=str, default=None)
     args = parser.parse_args()
 
     explicit_models = args.models is not None
-    model_keys = args.models if explicit_models else list(MODEL_REGISTRY.keys())
+    if explicit_models:
+        model_keys = args.models
+    elif args.backend == "mlx" or (args.backend == "auto" and _is_apple_silicon()):
+        model_keys = list(MLX_DEFAULT_MODELS)
+    else:
+        model_keys = list(CUDA_DEFAULT_MODELS)
 
     run_benchmark(
         data_dir=args.data_dir,

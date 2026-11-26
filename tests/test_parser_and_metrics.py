@@ -40,6 +40,14 @@ def test_parse_plain_answer_prefix_and_fallback() -> None:
     assert p3.predicted_letter is None
     assert p3.format_compliant is False
 
+    # Ensure lowercase English word 'a' never beats verbatim option text
+    p4 = parse_model_response(
+        "The diagnosis is likely Pearly penile papules (PPP). Consult a healthcare professional.",
+        {"A": "Condyloma", "D": "Pearly penile papules"},
+    )
+    assert p4.predicted_letter == "D"
+    assert p4.format_compliant is False
+
 
 def test_evaluate_ranking_and_generate_charts_and_demos(tmp_path: Path) -> None:
     img_dir = tmp_path / "images"
@@ -217,7 +225,7 @@ def test_run_benchmark_skips_failing_gated_model(tmp_path: Path, monkeypatch) ->
             if self.spec.key == "medgemma-1.5-4b":
                 raise OSError("403 Client Error: gated repo")
 
-        def predict_mc(self, image, question, options):
+        def predict_mc(self, image, question, options, image_path=None):
             return "<answer>A</answer>", 0.5
 
         def peak_vram_gb(self):

@@ -1,0 +1,66 @@
+model_key,model_name,domain,accuracy_pct
+biomedclip,BiomedCLIP (200M),Cardiovascular,28.6
+biomedclip,BiomedCLIP (200M),Digestive,28.6
+biomedclip,BiomedCLIP (200M),Endocrine,28.6
+biomedclip,BiomedCLIP (200M),Integumentary,0.0
+biomedclip,BiomedCLIP (200M),Lymphatic,0.0
+biomedclip,BiomedCLIP (200M),Muscular,50.0
+biomedclip,BiomedCLIP (200M),NEJM Clinical Case,20.0
+biomedclip,BiomedCLIP (200M),Nervous,16.7
+biomedclip,BiomedCLIP (200M),Other / NA,16.7
+biomedclip,BiomedCLIP (200M),Reproductive,33.3
+biomedclip,BiomedCLIP (200M),Respiratory,16.7
+biomedclip,BiomedCLIP (200M),Skeletal,0.0
+biomedclip,BiomedCLIP (200M),Urinary,16.7
+llava-med-7b,LLaVA-Med v1.5 (7B),Cardiovascular,0.0
+llava-med-7b,LLaVA-Med v1.5 (7B),Digestive,14.3
+llava-med-7b,LLaVA-Med v1.5 (7B),Endocrine,14.3
+llava-med-7b,LLaVA-Med v1.5 (7B),Integumentary,33.3
+llava-med-7b,LLaVA-Med v1.5 (7B),Lymphatic,16.7
+llava-med-7b,LLaVA-Med v1.5 (7B),Muscular,0.0
+llava-med-7b,LLaVA-Med v1.5 (7B),NEJM Clinical Case,41.3
+llava-med-7b,LLaVA-Med v1.5 (7B),Nervous,16.7
+llava-med-7b,LLaVA-Med v1.5 (7B),Other / NA,0.0
+llava-med-7b,LLaVA-Med v1.5 (7B),Reproductive,50.0
+llava-med-7b,LLaVA-Med v1.5 (7B),Respiratory,16.7
+llava-med-7b,LLaVA-Med v1.5 (7B),Skeletal,0.0
+llava-med-7b,LLaVA-Med v1.5 (7B),Urinary,33.3
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Cardiovascular,0.0
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Digestive,28.6
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Endocrine,14.3
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Integumentary,0.0
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Lymphatic,16.7
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Muscular,16.7
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",NEJM Clinical Case,52.0
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Nervous,16.7
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Other / NA,33.3
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Reproductive,33.3
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Respiratory,0.0
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Skeletal,33.3
+medgemma-1.5-4b-mlx,"MedGemma 1.5 (4B, MLX 4-bit)",Urinary,0.0
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Cardiovascular,28.6
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Digestive,0.0
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Endocrine,28.6
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Integumentary,16.7
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Lymphatic,0.0
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Muscular,0.0
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",NEJM Clinical Case,46.7
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Nervous,33.3
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Other / NA,16.7
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Reproductive,16.7
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Respiratory,50.0
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Skeletal,16.7
+medvlm-r1-2b-mlx,"MedVLM-R1 (2B, MLX 4-bit)",Urinary,66.7
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Cardiovascular,28.6
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Digestive,28.6
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Endocrine,14.3
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Integumentary,16.7
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Lymphatic,0.0
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Muscular,16.7
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),NEJM Clinical Case,41.3
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Nervous,0.0
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Other / NA,16.7
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Reproductive,16.7
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Respiratory,50.0
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Skeletal,33.3
+qwen2.5-vl-3b-medsft,Qwen2.5-VL-MedSFT (3B),Urinary,16.7

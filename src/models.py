@@ -76,7 +76,49 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         gated=False,
         max_new_tokens=32,
     ),
+    "medgemma-1.5-4b-mlx": ModelSpec(
+        key="medgemma-1.5-4b-mlx",
+        display_name="MedGemma 1.5 (4B, MLX 4-bit)",
+        hf_id="mlx-community/medgemma-1.5-4b-it-4bit",
+        family="mlx_vlm",
+        params_label="4B-4bit",
+        gated=False,
+        max_new_tokens=64,
+    ),
+    "medvlm-r1-2b-mlx": ModelSpec(
+        key="medvlm-r1-2b-mlx",
+        display_name="MedVLM-R1 (2B, MLX 4-bit)",
+        hf_id="JZPeterPan/MedVLM-R1",
+        family="mlx_vlm",
+        params_label="2B-4bit",
+        gated=False,
+        uses_think_tags=True,
+        max_new_tokens=200,
+    ),
+    "medgemma-1.0-4b-mlx": ModelSpec(
+        key="medgemma-1.0-4b-mlx",
+        display_name="MedGemma 1.0 (4B, MLX 4-bit)",
+        hf_id="mlx-community/medgemma-4b-it-4bit",
+        family="mlx_vlm",
+        params_label="4B-4bit",
+        gated=False,
+        max_new_tokens=64,
+    ),
 }
+
+CUDA_DEFAULT_MODELS = [
+    "medgemma-1.5-4b",
+    "llava-med-7b",
+    "medvlm-r1-2b",
+    "qwen2.5-vl-3b-medsft",
+    "biomedclip",
+]
+
+MLX_DEFAULT_MODELS = [
+    "medgemma-1.5-4b-mlx",
+    "medvlm-r1-2b-mlx",
+    "biomedclip",
+]
 
 
 def build_clinical_prompt(
@@ -191,17 +233,45 @@ def _load_model_with_attn_fallback(model_cls: Any, hf_id: str, **kwargs: Any) ->
 
 
 class MedicalVLMRunner:
-    """Sequential 4-bit medical VLM loader and inference wrapper for Colab T4."""
+    """Sequential 4-bit medical VLM loader and inference wrapper (CUDA or Apple MLX)."""
 
     def __init__(self, spec: ModelSpec, hf_token: str | None = None) -> None:
         self.spec = spec
         self.hf_token = hf_token or os.environ.get("HF_TOKEN") or None
         self.model: Any = None
         self.processor: Any = None
+        self._mlx_config: Any = None
+        self._mlx_peak_gb: float = 0.0
         self._temp_dir: str | None = None
 
+    def _resolve_mlx_path(self) -> str:
+        """Return an MLX-ready HF repo or convert a PyTorch HF repo to 4-bit MLX locally."""
+        if self.spec.hf_id.startswith("mlx-community/"):
+            return self.spec.hf_id
+
+        local_mlx_dir = Path("models") / f"{self.spec.key}-4bit"
+        if (local_mlx_dir / "config.json").exists():
+            return str(local_mlx_dir)
+
+        from mlx_vlm.convert import convert
+
+        src_path, temp_dir = _prepare_model_source(self.spec.hf_id, self.hf_token)
+        try:
+            local_mlx_dir.parent.mkdir(parents=True, exist_ok=True)
+            convert(
+                hf_path=src_path,
+                mlx_path=str(local_mlx_dir),
+                quantize=True,
+                q_bits=4,
+                q_group_size=64,
+            )
+        finally:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        return str(local_mlx_dir)
+
     def load(self) -> None:
-        """Load 4-bit quantized weights and processor into GPU VRAM."""
+        """Load 4-bit quantized weights and processor into GPU/Metal memory."""
         import torch
         from transformers import (
             AutoConfig,
@@ -214,11 +284,28 @@ class MedicalVLMRunner:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
+        if self.spec.family == "mlx_vlm":
+            import mlx.core as mx
+            from mlx_vlm import load as mlx_load
+            from mlx_vlm.utils import load_config as mlx_load_config
+
+            mx.reset_peak_memory()
+            mlx_path = self._resolve_mlx_path()
+            self.model, self.processor = mlx_load(mlx_path)
+            self._mlx_config = mlx_load_config(mlx_path)
+            self._mlx_peak_gb = round(mx.get_peak_memory() / (1024**3), 2)
+            return
+
         if self.spec.family == "biomedclip":
             from open_clip import create_model_from_pretrained, get_tokenizer
 
             hub_id = f"hf-hub:{self.spec.hf_id}"
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                device = torch.device("mps")
+            else:
+                device = torch.device("cpu")
             model, preprocess = create_model_from_pretrained(hub_id)
             model.to(device)
             model.eval()
@@ -280,12 +367,53 @@ class MedicalVLMRunner:
         image: Image.Image,
         prompt: str,
         max_new_tokens: int = 320,
+        image_path: str | Path | None = None,
     ) -> tuple[str, float]:
         """Run single-image inference and return (raw_text, latency_seconds)."""
         import torch
 
         if self.model is None or self.processor is None:
             raise RuntimeError(f"Model {self.spec.key} is not loaded.")
+
+        if self.spec.family == "mlx_vlm":
+            import mlx.core as mx
+            from mlx_vlm import generate as mlx_generate
+            from mlx_vlm.prompt_utils import apply_chat_template as mlx_apply_chat_template
+
+            temp_img_path: Path | None = None
+            if image_path is not None and Path(image_path).exists():
+                img_ref = str(image_path)
+            else:
+                fd, tmp_name = tempfile.mkstemp(suffix=".png")
+                os.close(fd)
+                temp_img_path = Path(tmp_name)
+                image.convert("RGB").save(temp_img_path, format="PNG")
+                img_ref = str(temp_img_path)
+
+            try:
+                formatted_prompt = mlx_apply_chat_template(
+                    self.processor, self._mlx_config, prompt, num_images=1
+                )
+                start = time.perf_counter()
+                result = mlx_generate(
+                    self.model,
+                    self.processor,
+                    formatted_prompt,
+                    image=[img_ref],
+                    max_tokens=max_new_tokens,
+                    temperature=0.0,
+                    resize_shape=(512, 512),
+                    verbose=False,
+                )
+                latency = time.perf_counter() - start
+                peak = float(getattr(result, "peak_memory", 0.0) or 0.0)
+                if peak == 0.0:
+                    peak = mx.get_peak_memory() / (1024**3)
+                self._mlx_peak_gb = max(self._mlx_peak_gb, round(peak, 2))
+                return str(result.text).strip(), latency
+            finally:
+                if temp_img_path is not None:
+                    temp_img_path.unlink(missing_ok=True)
 
         rgb_img = image.convert("RGB")
         start = time.perf_counter()
@@ -314,6 +442,7 @@ class MedicalVLMRunner:
         image: Image.Image,
         question: str,
         options: dict[str, str],
+        image_path: str | Path | None = None,
     ) -> tuple[str, float]:
         """Run unified multiple-choice inference for generative VLMs or BiomedCLIP."""
         import torch
@@ -324,7 +453,12 @@ class MedicalVLMRunner:
                 options=options,
                 uses_think_tags=self.spec.uses_think_tags,
             )
-            return self.predict(image, prompt, max_new_tokens=self.spec.max_new_tokens)
+            return self.predict(
+                image,
+                prompt,
+                max_new_tokens=self.spec.max_new_tokens,
+                image_path=image_path,
+            )
 
         if self.model is None or self.processor is None:
             raise RuntimeError(f"Model {self.spec.key} is not loaded.")
@@ -400,23 +534,43 @@ class MedicalVLMRunner:
         return self.processor(text=chat_text, images=rgb_img, return_tensors="pt")
 
     def peak_vram_gb(self) -> float:
-        """Return peak allocated GPU VRAM in GB since load()."""
+        """Return peak allocated GPU/Metal memory in GB since load()."""
         import torch
 
-        if not torch.cuda.is_available():
-            return 0.0
-        return round(torch.cuda.max_memory_allocated() / (1024**3), 2)
+        if self.spec.family == "mlx_vlm":
+            return self._mlx_peak_gb
+        if torch.cuda.is_available():
+            return round(torch.cuda.max_memory_allocated() / (1024**3), 2)
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            try:
+                return round(torch.mps.current_allocated_memory() / (1024**3), 2)
+            except Exception:
+                return 0.0
+        return 0.0
 
     def unload(self) -> None:
-        """Explicitly release GPU VRAM and system RAM before the next model loads."""
+        """Explicitly release GPU/Metal memory and system RAM before the next model loads."""
         import torch
 
         self.model = None
         self.processor = None
+        self._mlx_config = None
         if self._temp_dir:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
             self._temp_dir = None
         gc.collect()
+        if self.spec.family == "mlx_vlm":
+            try:
+                import mlx.core as mx
+
+                mx.clear_cache()
+            except Exception:
+                pass
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            try:
+                torch.mps.empty_cache()
+            except Exception:
+                pass

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -77,10 +78,10 @@ def generate_static_demo_cards(
         ax_img.set_title(f"Demo Case #{idx + 1}: {row['domain']}\n({row['source']})", fontsize=11)
 
         lines = [
-            f"Question: {row['question'][:210]}{'...' if len(row['question']) > 210 else ''}",
+            textwrap.fill(f"Question: {row['question']}", width=76)[:280],
             "",
             f"Ground Truth: {correct} — {options.get(correct, '')}",
-            "-" * 60,
+            "-" * 74,
         ]
         for model_name, by_case in preds_by_model.items():
             rec = by_case.get(case_id)
@@ -92,7 +93,8 @@ def generate_static_demo_cards(
                 f"[{status}] {model_name}: {pred_l} ({rec.get('latency_sec', 0):.2f}s)"
             )
             snippet = (rec.get("reasoning") or rec.get("raw_response") or "").replace("\n", " ")
-            lines.append(f"   Notes: {snippet[:120]}...")
+            wrapped = textwrap.fill(f"Notes: {snippet[:140]}", width=72, initial_indent="   ", subsequent_indent="          ")
+            lines.append(wrapped)
 
         ax_txt.axis("off")
         ax_txt.text(

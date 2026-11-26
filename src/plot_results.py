@@ -113,11 +113,11 @@ def plot_source_and_human_comparison(
         )
 
     ax.set_xticks(list(x))
-    ax.set_xticklabels(
-        [f"#{int(r)}\n{n}" for r, n in zip(df["rank"], df["model_name"])],
-        fontsize=10,
-    )
-    ax.set_ylim(0, 108)
+    short_labels = [
+        f"#{int(r)}\n{n.replace(' (', '\n(')}" for r, n in zip(df["rank"], df["model_name"])
+    ]
+    ax.set_xticklabels(short_labels, fontsize=9.5)
+    ax.set_ylim(0, 112)
     ax.set_ylabel("Accuracy (%)")
     ax.set_title("Benchmark Breakdown by Dataset Source vs. Human Clinician Baseline", pad=14)
     ax.legend(loc="upper right", fontsize=9.5)
@@ -166,8 +166,8 @@ def plot_domain_heatmap(
 
 
 def plot_accuracy_vs_efficiency(summary_df: pd.DataFrame, out_path: Path) -> None:
-    """Plot Accuracy (%) vs Inference Latency (s/img), scaled by Peak VRAM (GB)."""
-    fig, ax = plt.subplots(figsize=(9.5, 5.8))
+    """Plot Accuracy (%) vs Inference Latency (s/img), scaled by Peak Memory (GB)."""
+    fig, ax = plt.subplots(figsize=(11, 6.2))
     sizes = [max(v, 0.8) * 160 for v in summary_df["peak_vram_gb"]]
     scatter = ax.scatter(
         summary_df["mean_latency_sec"],
@@ -180,22 +180,39 @@ def plot_accuracy_vs_efficiency(summary_df: pd.DataFrame, out_path: Path) -> Non
         linewidths=1.2,
     )
 
-    for _, row in summary_df.iterrows():
+    max_x = max(float(summary_df["mean_latency_sec"].max()), 5.0)
+    max_y = max(float(summary_df["overall_accuracy_pct"].max()), 45.0)
+    offsets = [(14, 24), (16, 12), (16, -24), (16, -38), (14, -22)]
+    sorted_df = summary_df.sort_values("rank").reset_index(drop=True)
+
+    for idx, row in sorted_df.iterrows():
+        dx, dy = offsets[idx % len(offsets)]
+        ha = "left"
+        if float(row["mean_latency_sec"]) > max_x * 0.72:
+            dx, ha = -14, "right"
+        label = (
+            f"#{int(row['rank'])} {row['model_name']}\n"
+            f"({row['overall_accuracy_pct']:.1f}%, {row['peak_vram_gb']:.2f} GB)"
+        )
         ax.annotate(
-            f"#{int(row['rank'])} {row['model_name']}\n({row['overall_accuracy_pct']:.1f}%, {row['peak_vram_gb']:.1f} GB)",
+            label,
             (row["mean_latency_sec"], row["overall_accuracy_pct"]),
             textcoords="offset points",
-            xytext=(10, 6),
-            fontsize=9.5,
+            xytext=(dx, dy),
+            ha=ha,
+            fontsize=8.8,
             fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#BBBBBB", alpha=0.9),
+            arrowprops=dict(arrowstyle="-", color="#666666", lw=0.9),
         )
 
     cbar = fig.colorbar(scatter, ax=ax)
-    cbar.set_label("Peak VRAM (GB)")
-    ax.set_ylim(0, 108)
+    cbar.set_label("Peak Memory / VRAM (GB)")
+    ax.set_xlim(-max_x * 0.08, max_x * 1.15)
+    ax.set_ylim(0, min(108, max(60, max_y + 22)))
     ax.set_xlabel("Mean Inference Time (seconds / image)")
     ax.set_ylabel("Overall Accuracy (%)")
-    ax.set_title("Accuracy (%) vs. Speed & VRAM Trade-off on Colab T4", pad=14)
+    ax.set_title("Accuracy (%) vs. Speed & Memory Trade-off", pad=14)
     fig.tight_layout()
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)

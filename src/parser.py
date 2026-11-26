@@ -41,18 +41,24 @@ def _match_letter(candidate: str, valid_letters: set[str]) -> str | None:
     if not candidate:
         return None
     letters_pat = "".join(sorted(valid_letters))
-    # Priority 1: Exact single letter or parenthesized/bracketed letter at start
-    patterns = [
+    # Priority 1: Explicit start-of-string or explicit prefix (case-insensitive)
+    explicit_patterns = [
         rf"^\s*[\(\[]?([{letters_pat}])[\)\]\.\:]?(?:\s|$)",
         rf"(?:answer|choice|option|diagnosis)\s*(?:is|:|=)?\s*[\(\[]?([{letters_pat}])[\)\]\.\:]?(?:\b|$)",
-        rf"\b([{letters_pat}])\b",
     ]
-    for pat in patterns:
+    for pat in explicit_patterns:
         m = re.search(pat, candidate, flags=re.IGNORECASE)
         if m:
             letter = m.group(1).upper()
             if letter in valid_letters:
                 return letter
+
+    # Priority 2: Standalone uppercase option letter only (avoids matching English word 'a')
+    m_upper = re.search(rf"(?<![A-Za-z])([{letters_pat}])(?=[\)\]\.\:,;\s]|$)", candidate)
+    if m_upper:
+        letter = m_upper.group(1)
+        if letter in valid_letters:
+            return letter
     return None
 
 
@@ -65,7 +71,7 @@ def parse_model_response(
     Supports:
     - <think>...</think> + <answer>B</answer> (MedVLM-R1 style)
     - Explicit answer prefixes ("Answer: C", "Option B", "(D)")
-    - Fallback option-text substring match when no unambiguous letter is found
+    - Option-text verbatim match before standalone uppercase letter fallback
     """
     valid_letters = {k.upper() for k in options.keys()}
     reasoning, remainder = extract_reasoning(raw_text)
@@ -83,17 +89,23 @@ def parse_model_response(
                 format_compliant=True,
             )
 
-    # 2. Structured or leading letter in remainder text
-    letter = _match_letter(remainder, valid_letters)
-    if letter:
-        return ParsedPrediction(
-            predicted_letter=letter,
-            reasoning=reasoning,
-            raw_answer_span=remainder[:160],
-            format_compliant=True,
-        )
+    # 2. Explicit answer prefixes ("Answer: C", leading "B.", etc.)
+    letters_pat = "".join(sorted(valid_letters))
+    for pat in (
+        rf"^\s*[\(\[]?([{letters_pat}])[\)\]\.\:]?(?:\s|$)",
+        rf"(?:answer|choice|option|diagnosis)\s*(?:is|:|=)?\s*[\(\[]?([{letters_pat}])[\)\]\.\:]?(?:\b|$)",
+        rf"labeled\s+(?:as\s+)?[\"'\(\[]?([{letters_pat}])[\"'\)\]]?",
+    ):
+        m = re.search(pat, remainder, flags=re.IGNORECASE)
+        if m and m.group(1).upper() in valid_letters:
+            return ParsedPrediction(
+                predicted_letter=m.group(1).upper(),
+                reasoning=reasoning,
+                raw_answer_span=remainder[:160],
+                format_compliant=True,
+            )
 
-    # 3. Fallback: longest option text mentioned verbatim in the response
+    # 3. Option-text verbatim match (checked before loose uppercase letter search)
     lowered = remainder.lower()
     matched_letters: list[tuple[int, str]] = []
     for key, text in options.items():
@@ -104,6 +116,16 @@ def parse_model_response(
         matched_letters.sort(reverse=True)
         return ParsedPrediction(
             predicted_letter=matched_letters[0][1],
+            reasoning=reasoning,
+            raw_answer_span=remainder[:160],
+            format_compliant=False,
+        )
+
+    # 4. Standalone uppercase letter fallback (e.g., "...most likely C.")
+    m_upper = re.search(rf"(?<![A-Za-z])([{letters_pat}])(?=[\)\]\.\:,;\s]|$)", remainder)
+    if m_upper and m_upper.group(1) in valid_letters:
+        return ParsedPrediction(
+            predicted_letter=m_upper.group(1),
             reasoning=reasoning,
             raw_answer_span=remainder[:160],
             format_compliant=False,
