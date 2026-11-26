@@ -1,0 +1,10 @@
+[project]
+name = "medical-image-analyzer-vlm-benchmark"
+version = "0.1.0"
+description = "Benchmarking small medical-trained Vision-Language Models on an uncontaminated 150-image multi-modality dataset."
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

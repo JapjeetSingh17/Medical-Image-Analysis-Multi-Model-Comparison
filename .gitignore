@@ -1,0 +1,16 @@
+# Python / venv
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Heavy datasets & local model caches (generated at runtime)
+data/
+models/
+results/raw/
+*.jsonl
+.DS_Store
+
+# Keep generated sample/placeholder assets if explicitly added, ignore large downloads
+hf_cache/
