@@ -486,6 +486,64 @@ class MedicalVLMRunner:
         scores_str = ", ".join(f"{lbl}: {p * 100:.1f}%" for lbl, p in ranked)
         return f"<answer>{best_letter}</answer> (BiomedCLIP similarity: {scores_str})", latency
 
+    def predict_freeform(
+        self,
+        image: Image.Image,
+        custom_question: str = "",
+        image_path: str | Path | None = None,
+    ) -> tuple[str, float]:
+        """Analyze a medical image and return a plain-English clinical summary."""
+        import torch
+
+        if self.spec.family == "biomedclip":
+            if self.model is None or self.processor is None:
+                raise RuntimeError(f"Model {self.spec.key} is not loaded.")
+            concepts = [
+                "a normal chest X-ray without acute cardiopulmonary disease",
+                "a chest X-ray showing pneumonia, consolidation, or lung nodule",
+                "an electrocardiogram (ECG) tracing",
+                "a brain or spine MRI scan",
+                "a CT scan showing internal organ pathology",
+                "a dermatology photograph of a skin lesion or rash",
+                "an ultrasound scan",
+                "a histopathology or microscopy tissue slide",
+                "a bone X-ray showing a fracture or skeletal abnormality",
+            ]
+            preprocess, tokenizer, device = self.processor
+            texts = [f"this medical image shows {c}" for c in concepts]
+            start = time.perf_counter()
+            img_tensor = preprocess(image.convert("RGB")).unsqueeze(0).to(device)
+            tok_tensor = tokenizer(texts, context_length=256).to(device)
+            with torch.inference_mode():
+                img_feat = self.model.encode_image(img_tensor)
+                txt_feat = self.model.encode_text(tok_tensor)
+                img_feat = img_feat / img_feat.norm(dim=-1, keepdim=True)
+                txt_feat = txt_feat / txt_feat.norm(dim=-1, keepdim=True)
+                probs = ((img_feat @ txt_feat.T) * self.model.logit_scale.exp()).softmax(dim=-1).cpu().numpy()[0]
+            latency = time.perf_counter() - start
+            ranked = sorted(zip(concepts, probs), key=lambda kv: kv[1], reverse=True)
+            top1, p1 = ranked[0]
+            top2, p2 = ranked[1]
+            sentence = (
+                f"This medical image most closely matches {top1} ({p1 * 100:.1f}% confidence), "
+                f"followed by {top2} ({p2 * 100:.1f}%)."
+            )
+            return sentence, latency
+
+        extra = f" Focus specifically on: {custom_question.strip()}" if custom_question.strip() else ""
+        prompt = (
+            "You are a medical imaging AI assistant. Examine this medical image and write 2 to 3 "
+            "clear, plain-English sentences describing: (1) the imaging modality and anatomical region, "
+            "(2) the key visual findings, and (3) the most likely clinical impression."
+            f"{extra} Do not output XML tags, bullet points, or multiple-choice letters."
+        )
+        return self.predict(
+            image,
+            prompt,
+            max_new_tokens=max(self.spec.max_new_tokens, 140),
+            image_path=image_path,
+        )
+
     def _prepare_inputs(self, rgb_img: Image.Image, prompt: str) -> dict[str, Any]:
         """Format multimodal chat inputs according to model family."""
         messages = [

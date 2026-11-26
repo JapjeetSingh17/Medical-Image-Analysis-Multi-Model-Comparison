@@ -286,3 +286,13 @@ def test_patch_json_file_fixes_null_use_cache(tmp_path: Path) -> None:
     assert out["use_cache"] is True
     assert out["text_config"]["use_cache"] is True
     assert "attn_implementation" not in out
+
+
+def test_format_english_summary_strips_xml_tags() -> None:
+    from src.demo_app import format_english_summary
+
+    raw = "<think>Normal lung fields without consolidation.</think><answer>The chest X-ray appears normal with clear lung fields.</answer>"
+    assert format_english_summary(raw) == "The chest X-ray appears normal with clear lung fields."
+
+    raw_letter_only = "<think>Left lower lobe infiltrate visible on chest radiograph.</think><answer>B</answer>"
+    assert format_english_summary(raw_letter_only) == "Left lower lobe infiltrate visible on chest radiograph."

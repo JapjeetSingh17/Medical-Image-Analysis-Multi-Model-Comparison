@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,19 @@ import pandas as pd
 from PIL import Image
 
 from src.models import MODEL_REGISTRY, MedicalVLMRunner
-from src.parser import parse_model_response
+from src.parser import extract_reasoning
+
+
+def format_english_summary(raw_text: str) -> str:
+    """Clean XML/thought tags into a readable plain-English paragraph."""
+    reasoning, remainder = extract_reasoning(raw_text or "")
+    cleaned = re.sub(r"</?(?:answer|think)>", " ", remainder, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned.split()) <= 2 and reasoning:
+        cleaned = re.sub(r"\s+", " ", reasoning).strip()
+    if not cleaned:
+        return "No clear English description was generated for this image."
+    return cleaned
 
 
 def select_demo_cases(manifest_path: Path, count: int = 3) -> pd.DataFrame:
@@ -136,91 +149,81 @@ def launch_gradio_demo(
             "correct": row["correct_letter"],
         }
 
-    def load_preset(preset_label: str) -> tuple[Image.Image, str, str, str]:
+    def load_preset(preset_label: str) -> tuple[Image.Image, str, str]:
         item = presets[preset_label]
         opts = json.loads(item["options_json"])
-        opts_lines = "\n".join(f"{k}: {v}" for k, v in sorted(opts.items()))
-        gt = f"Ground Truth: {item['correct']} ({opts.get(item['correct'], '')})"
-        return Image.open(item["image_path"]).convert("RGB"), item["question"], opts_lines, gt
+        gt = f"Benchmark Reference: {item['correct']} ({opts.get(item['correct'], '')})"
+        return Image.open(item["image_path"]).convert("RGB"), item["question"], gt
+
+    def on_custom_upload(img: Image.Image | None) -> tuple[str, str]:
+        if img is None:
+            return "", ""
+        return "", "Custom uploaded image (no preset reference)"
 
     def analyze_image(
         image: Image.Image | None,
-        question: str,
-        options_text: str,
+        optional_question: str,
         selected_models: list[str],
     ) -> str:
-        if image is None or not question.strip():
-            return "Please upload or select a medical image and enter a clinical question."
-        options: dict[str, str] = {}
-        for line in options_text.strip().splitlines():
-            if ":" in line:
-                k, v = line.split(":", 1)
-                options[k.strip().upper()] = v.strip()
-        if not options:
-            options = {"A": "Normal / Negative", "B": "Abnormal / Positive"}
+        if image is None:
+            return "Please upload a medical image or pick one of the presets above."
+        if not selected_models:
+            return "Please select at least one model to run."
 
         md_sections: list[str] = []
         for key in selected_models:
             spec = MODEL_REGISTRY[key]
             runner = MedicalVLMRunner(spec, hf_token=hf_token)
             runner.load()
-            raw_resp, latency = runner.predict_mc(image, question, options)
+            raw_resp, latency = runner.predict_freeform(image, custom_question=optional_question)
             vram = runner.peak_vram_gb()
             runner.unload()
 
-            parsed = parse_model_response(raw_resp, options)
-            pred_disp = (
-                f"**{parsed.predicted_letter}** ({options.get(parsed.predicted_letter, '')})"
-                if parsed.predicted_letter
-                else "**Unparsed**"
-            )
+            english_summary = format_english_summary(raw_resp)
             section = [
                 f"### {spec.display_name}",
-                f"- **Prediction:** {pred_disp}",
-                f"- **Latency:** `{latency:.2f}s` | **Peak VRAM:** `{vram:.2f} GB`",
+                f"{english_summary}",
+                f"*Latency: `{latency:.2f}s` | Peak Memory: `{vram:.2f} GB`*",
             ]
-            if parsed.reasoning:
-                section.append(f"- **Reasoning (`<think>`):** {parsed.reasoning}")
-            clean_raw = raw_resp.replace("<", "&lt;").replace(">", "&gt;")
-            section.append(f"- **Raw Output:** {clean_raw}")
-            md_sections.append("\n".join(section))
+            md_sections.append("\n\n".join(section))
 
         return "\n\n---\n\n".join(md_sections)
 
-    def on_custom_upload(img: Image.Image | None) -> str:
-        return "Custom Image (No Preset Ground Truth)" if img is not None else ""
-
     first_label = next(iter(presets))
-    init_img, init_q, init_opts, init_gt = load_preset(first_label)
+    init_img, init_q, init_gt = load_preset(first_label)
 
     with gr.Blocks(title="Medical Image Analyzer — Multi-VLM Demo") as demo:
-        gr.Markdown("# Medical Image Analyzer — Live Multi-Model Comparison")
+        gr.Markdown("# Medical Image Analyzer — Live Multi-Model Demo")
         gr.Markdown(
-            "Select one of the **3 pre-loaded multi-modality clinical cases** or upload your own medical image."
+            "Upload any medical image (or pick a preset) and click **Analyze Medical Image** — no question required."
         )
         with gr.Row():
             preset_dd = gr.Dropdown(
-                choices=list(presets.keys()), value=first_label, label="Presentation Demo Preset"
+                choices=list(presets.keys()), value=first_label, label="Sample Medical Image Preset"
             )
             model_checks = gr.CheckboxGroup(
                 choices=model_keys,
-                value=model_keys[:2],
+                value=model_keys,
                 label="Models to Compare (Run Sequentially)",
             )
-        with gr.Row():
-            img_in = gr.Image(value=init_img, type="pil", label="Medical Image")
-            with gr.Column():
-                q_in = gr.Textbox(value=init_q, lines=4, label="Clinical Question")
-                opts_in = gr.Textbox(value=init_opts, lines=5, label="Options (Letter: Text)")
-                gt_out = gr.Textbox(value=init_gt, interactive=False, label="Reference Answer")
-        run_btn = gr.Button("Analyze Image Across Selected Models", variant="primary")
-        out_md = gr.Markdown(label="Model Comparison Output")
+        img_in = gr.Image(value=init_img, type="pil", label="Upload or Preview Medical Image")
+        with gr.Accordion("Optional: Add a Specific Question / View Preset Context", open=False):
+            q_in = gr.Textbox(
+                value="",
+                placeholder="Leave blank for automatic image analysis...",
+                lines=2,
+                label="Optional Question (Leave Blank for Auto Analysis)",
+            )
+            gt_out = gr.Textbox(value=init_gt, interactive=False, label="Preset Reference Info")
 
-        preset_dd.change(load_preset, inputs=[preset_dd], outputs=[img_in, q_in, opts_in, gt_out])
-        img_in.upload(on_custom_upload, inputs=[img_in], outputs=[gt_out])
+        run_btn = gr.Button("Analyze Medical Image", variant="primary")
+        out_md = gr.Markdown(label="Model Analysis (Plain English)")
+
+        preset_dd.change(load_preset, inputs=[preset_dd], outputs=[img_in, q_in, gt_out])
+        img_in.upload(on_custom_upload, inputs=[img_in], outputs=[q_in, gt_out])
         run_btn.click(
             analyze_image,
-            inputs=[img_in, q_in, opts_in, model_checks],
+            inputs=[img_in, q_in, model_checks],
             outputs=[out_md],
         )
 
