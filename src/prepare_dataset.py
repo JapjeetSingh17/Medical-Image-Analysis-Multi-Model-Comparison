@@ -8,13 +8,16 @@ Sources:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import random
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from datasets import load_dataset
+from huggingface_hub import hf_hub_download
 from PIL import Image
 
 MONTH_ORDER = {
@@ -51,9 +54,36 @@ def _parse_pct(val: Any) -> float:
         return 0.0
 
 
-def _save_pil_image(img: Image.Image, dest: Path, max_side: int = 768) -> None:
+def _coerce_pil_image(img_obj: Any, zip_handle: zipfile.ZipFile | None = None, zip_index: dict[str, str] | None = None) -> Image.Image:
+    """Resolve PIL Image from an Image object, bytes/dict, or filename inside images.zip."""
+    if isinstance(img_obj, Image.Image):
+        return img_obj
+    if isinstance(img_obj, dict) and img_obj.get("bytes"):
+        return Image.open(io.BytesIO(img_obj["bytes"]))
+    if isinstance(img_obj, (bytes, bytearray)):
+        return Image.open(io.BytesIO(img_obj))
+    if isinstance(img_obj, str):
+        if zip_handle is not None and zip_index is not None:
+            member = zip_index.get(img_obj) or zip_index.get(Path(img_obj).name)
+            if member:
+                with zip_handle.open(member) as fh:
+                    return Image.open(io.BytesIO(fh.read()))
+        path = Path(img_obj)
+        if path.exists():
+            return Image.open(path)
+    raise TypeError(f"Unsupported image payload type: {type(img_obj)!r}")
+
+
+def _save_pil_image(
+    img_obj: Any,
+    dest: Path,
+    max_side: int = 768,
+    zip_handle: zipfile.ZipFile | None = None,
+    zip_index: dict[str, str] | None = None,
+) -> None:
     """Save RGB image resized to at most max_side on its longest edge."""
     dest.parent.mkdir(parents=True, exist_ok=True)
+    img = _coerce_pil_image(img_obj, zip_handle=zip_handle, zip_index=zip_index)
     rgb = img.convert("RGB")
     if max(rgb.size) > max_side:
         rgb.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
@@ -63,6 +93,11 @@ def _save_pil_image(img: Image.Image, dest: Path, max_side: int = 768) -> None:
 def _sample_medxpert(n_samples: int, seed: int, img_dir: Path) -> list[dict[str, Any]]:
     """Sample single-image cases stratified across body systems from MedXpertQA-MM."""
     ds = load_dataset("TsinghuaC3I/MedXpertQA", "MM", split="test")
+    images_zip_path = hf_hub_download(
+        repo_id="TsinghuaC3I/MedXpertQA",
+        filename="images.zip",
+        repo_type="dataset",
+    )
     single_rows = [row for row in ds if len(row.get("images") or []) == 1]
 
     by_system: dict[str, list[dict[str, Any]]] = {}
@@ -86,28 +121,33 @@ def _sample_medxpert(n_samples: int, seed: int, img_dir: Path) -> list[dict[str,
         idx += 1
 
     records: list[dict[str, Any]] = []
-    for i, row in enumerate(selected):
-        case_id = f"medxpert_{row.get('id', i)}"
-        img_path = img_dir / f"{case_id}.png"
-        _save_pil_image(row["images"][0], img_path)
+    with zipfile.ZipFile(images_zip_path, "r") as zf:
+        zip_index = {Path(name).name: name for name in zf.namelist()}
+        for name in zf.namelist():
+            zip_index[name] = name
 
-        raw_opts = row["options"]
-        options = {str(k).upper(): str(v).strip() for k, v in raw_opts.items()}
-        records.append(
-            {
-                "case_id": case_id,
-                "source": "MedXpertQA-MM (2025)",
-                "domain": str(row.get("body_system") or "Clinical"),
-                "medical_task": str(row.get("medical_task") or "Diagnosis"),
-                "case_date": "2025",
-                "image_path": str(img_path),
-                "question": _strip_medxpert_choices(str(row["question"])),
-                "options_json": json.dumps(options, ensure_ascii=False),
-                "correct_letter": str(row["label"]).strip().upper(),
-                "human_vote_pct": None,
-                "human_plurality_correct": None,
-            }
-        )
+        for i, row in enumerate(selected):
+            case_id = f"medxpert_{row.get('id', i)}"
+            img_path = img_dir / f"{case_id}.png"
+            _save_pil_image(row["images"][0], img_path, zip_handle=zf, zip_index=zip_index)
+
+            raw_opts = row["options"]
+            options = {str(k).upper(): str(v).strip() for k, v in raw_opts.items()}
+            records.append(
+                {
+                    "case_id": case_id,
+                    "source": "MedXpertQA-MM (2025)",
+                    "domain": str(row.get("body_system") or "Clinical"),
+                    "medical_task": str(row.get("medical_task") or "Diagnosis"),
+                    "case_date": "2025",
+                    "image_path": str(img_path),
+                    "question": _strip_medxpert_choices(str(row["question"])),
+                    "options_json": json.dumps(options, ensure_ascii=False),
+                    "correct_letter": str(row["label"]).strip().upper(),
+                    "human_vote_pct": None,
+                    "human_plurality_correct": None,
+                }
+            )
     return records
 
 

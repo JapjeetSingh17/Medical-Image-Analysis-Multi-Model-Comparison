@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +14,7 @@ from src.demo_app import generate_static_demo_cards
 from src.evaluate import evaluate_all_models
 from src.parser import parse_model_response
 from src.plot_results import generate_all_charts
+from src.prepare_dataset import _save_pil_image
 
 
 def test_parse_medvlm_think_and_answer_tags() -> None:
@@ -159,3 +162,21 @@ def test_evaluate_ranking_and_generate_charts_and_demos(tmp_path: Path) -> None:
     assert len(cards) == 3
     for card in cards:
         assert card.exists() and card.stat().st_size > 1000
+
+
+def test_save_pil_image_from_zip_filename(tmp_path: Path) -> None:
+    zip_path = tmp_path / "images.zip"
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 32), color=(10, 120, 200)).save(buf, format="JPEG")
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("images/MM-0-a.jpeg", buf.getvalue())
+
+    out_png = tmp_path / "out.png"
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zip_index = {Path(name).name: name for name in zf.namelist()}
+        _save_pil_image("MM-0-a.jpeg", out_png, zip_handle=zf, zip_index=zip_index)
+
+    assert out_png.exists()
+    with Image.open(out_png) as saved:
+        assert saved.mode == "RGB"
+        assert saved.size == (32, 32)
