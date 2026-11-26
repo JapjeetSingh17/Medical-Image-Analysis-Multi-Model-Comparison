@@ -1,6 +1,7 @@
 transformers>=4.51.0
 accelerate>=1.2.0
 bitsandbytes>=0.45.0
+open_clip_torch>=2.23.0
 datasets>=3.2.0
 huggingface-hub>=0.28.0
 qwen-vl-utils>=0.0.10

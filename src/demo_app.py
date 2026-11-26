@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from PIL import Image
 
-from src.models import MODEL_REGISTRY, MedicalVLMRunner, build_clinical_prompt
+from src.models import MODEL_REGISTRY, MedicalVLMRunner
 from src.parser import parse_model_response
 
 
@@ -162,8 +162,7 @@ def launch_gradio_demo(
             spec = MODEL_REGISTRY[key]
             runner = MedicalVLMRunner(spec, hf_token=hf_token)
             runner.load()
-            prompt = build_clinical_prompt(question, options, uses_think_tags=spec.uses_think_tags)
-            raw_resp, latency = runner.predict(image, prompt)
+            raw_resp, latency = runner.predict_mc(image, question, options)
             vram = runner.peak_vram_gb()
             runner.unload()
 

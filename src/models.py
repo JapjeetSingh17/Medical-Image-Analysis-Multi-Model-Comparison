@@ -67,6 +67,15 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         gated=False,
         max_new_tokens=96,
     ),
+    "biomedclip": ModelSpec(
+        key="biomedclip",
+        display_name="BiomedCLIP (200M)",
+        hf_id="microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224",
+        family="biomedclip",
+        params_label="200M",
+        gated=False,
+        max_new_tokens=32,
+    ),
 }
 
 
@@ -205,6 +214,18 @@ class MedicalVLMRunner:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
+        if self.spec.family == "biomedclip":
+            from open_clip import create_model_from_pretrained, get_tokenizer
+
+            hub_id = f"hf-hub:{self.spec.hf_id}"
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model, preprocess = create_model_from_pretrained(hub_id)
+            model.to(device)
+            model.eval()
+            self.model = model
+            self.processor = (preprocess, get_tokenizer(hub_id), device)
+            return
+
         compute_dtype = _select_compute_dtype(self.spec.family)
         bnb_cfg = _build_bnb_config(compute_dtype)
         model_source, self._temp_dir = _prepare_model_source(self.spec.hf_id, self.hf_token)
@@ -287,6 +308,49 @@ class MedicalVLMRunner:
 
         latency = time.perf_counter() - start
         return decoded, latency
+
+    def predict_mc(
+        self,
+        image: Image.Image,
+        question: str,
+        options: dict[str, str],
+    ) -> tuple[str, float]:
+        """Run unified multiple-choice inference for generative VLMs or BiomedCLIP."""
+        import torch
+
+        if self.spec.family != "biomedclip":
+            prompt = build_clinical_prompt(
+                question=question,
+                options=options,
+                uses_think_tags=self.spec.uses_think_tags,
+            )
+            return self.predict(image, prompt, max_new_tokens=self.spec.max_new_tokens)
+
+        if self.model is None or self.processor is None:
+            raise RuntimeError(f"Model {self.spec.key} is not loaded.")
+
+        preprocess, tokenizer, device = self.processor
+        sorted_opts = sorted(options.items())
+        labels = [k for k, _ in sorted_opts]
+        texts = [f"this medical image shows {v}" for _, v in sorted_opts]
+
+        start = time.perf_counter()
+        img_tensor = preprocess(image.convert("RGB")).unsqueeze(0).to(device)
+        tok_tensor = tokenizer(texts, context_length=256).to(device)
+
+        with torch.inference_mode():
+            img_feat = self.model.encode_image(img_tensor)
+            txt_feat = self.model.encode_text(tok_tensor)
+            img_feat = img_feat / img_feat.norm(dim=-1, keepdim=True)
+            txt_feat = txt_feat / txt_feat.norm(dim=-1, keepdim=True)
+            logits = (img_feat @ txt_feat.T) * self.model.logit_scale.exp()
+            probs = logits.softmax(dim=-1).cpu().numpy()[0]
+
+        latency = time.perf_counter() - start
+        ranked = sorted(zip(labels, probs), key=lambda kv: kv[1], reverse=True)
+        best_letter = ranked[0][0]
+        scores_str = ", ".join(f"{lbl}: {p * 100:.1f}%" for lbl, p in ranked)
+        return f"<answer>{best_letter}</answer> (BiomedCLIP similarity: {scores_str})", latency
 
     def _prepare_inputs(self, rgb_img: Image.Image, prompt: str) -> dict[str, Any]:
         """Format multimodal chat inputs according to model family."""

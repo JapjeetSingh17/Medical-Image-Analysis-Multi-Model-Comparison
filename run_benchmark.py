@@ -14,10 +14,20 @@ from tqdm import tqdm
 
 from src.demo_app import generate_static_demo_cards
 from src.evaluate import evaluate_all_models
-from src.models import MODEL_REGISTRY, MedicalVLMRunner, build_clinical_prompt
+from src.models import MODEL_REGISTRY, MedicalVLMRunner
 from src.parser import parse_model_response
 from src.plot_results import generate_all_charts
 from src.prepare_dataset import build_benchmark_dataset
+
+
+def _t4_without_bf16() -> bool:
+    """Return True when running on a CUDA GPU that lacks native bfloat16 (e.g., Turing T4)."""
+    try:
+        import torch
+
+        return torch.cuda.is_available() and not torch.cuda.is_bf16_supported()
+    except Exception:
+        return False
 
 
 def _load_existing_case_ids(jsonl_path: Path) -> set[str]:
@@ -46,6 +56,7 @@ def run_benchmark(
     model_keys: list[str],
     smoke_test: bool = False,
     hf_token: str | None = None,
+    explicit_models: bool = False,
 ) -> None:
     """Execute dataset setup, sequential 4-bit inference, evaluation, and plotting."""
     manifest_path = data_dir / "manifest.csv"
@@ -62,9 +73,16 @@ def run_benchmark(
     raw_dir = results_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     token = hf_token or os.environ.get("HF_TOKEN") or None
+    no_bf16_gpu = _t4_without_bf16()
 
     for key in model_keys:
         spec = MODEL_REGISTRY[key]
+        if spec.family == "gemma3" and no_bf16_gpu and not explicit_models:
+            print(
+                f"[SKIP] {spec.display_name} auto-skipped on T4 GPU (no native bfloat16; "
+                "fp32 fallback takes ~12 min/image). Pass --models medgemma-1.5-4b to force it."
+            )
+            continue
         if spec.gated and not token:
             print(
                 f"[SKIP] {spec.display_name} requires HF_TOKEN (gated repo {spec.hf_id}). "
@@ -99,14 +117,9 @@ def run_benchmark(
         with out_jsonl.open("a", encoding="utf-8") as fh:
             for _, row in tqdm(pending.iterrows(), total=len(pending), desc=spec.key):
                 options = json.loads(row["options_json"])
-                prompt = build_clinical_prompt(
-                    question=str(row["question"]),
-                    options=options,
-                    uses_think_tags=spec.uses_think_tags,
-                )
                 img = Image.open(row["image_path"]).convert("RGB")
-                raw_resp, latency = runner.predict(
-                    img, prompt, max_new_tokens=spec.max_new_tokens
+                raw_resp, latency = runner.predict_mc(
+                    img, str(row["question"]), options
                 )
                 parsed = parse_model_response(raw_resp, options)
 
@@ -143,7 +156,7 @@ def main() -> None:
     parser.add_argument(
         "--models",
         nargs="+",
-        default=list(MODEL_REGISTRY.keys()),
+        default=None,
         choices=list(MODEL_REGISTRY.keys()),
     )
     parser.add_argument("--smoke-test", action="store_true")
@@ -151,12 +164,16 @@ def main() -> None:
     parser.add_argument("--hf-token", type=str, default=None)
     args = parser.parse_args()
 
+    explicit_models = args.models is not None
+    model_keys = args.models if explicit_models else list(MODEL_REGISTRY.keys())
+
     run_benchmark(
         data_dir=args.data_dir,
         results_dir=args.results_dir,
-        model_keys=args.models,
+        model_keys=model_keys,
         smoke_test=args.smoke_test and not args.full,
         hf_token=args.hf_token,
+        explicit_models=explicit_models,
     )
 
 
