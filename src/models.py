@@ -83,17 +83,41 @@ def build_clinical_prompt(
     return f"{instruction}\n\nQuestion:\n{question}\n\nOptions:\n{opts_text}"
 
 
-def _build_bnb_config() -> Any:
-    """Create T4-compatible 4-bit NF4 BitsAndBytesConfig using float16 compute."""
+def _select_compute_dtype(family: str) -> Any:
+    """Pick a numerically safe compute dtype for the current GPU and model family.
+
+    Gemma 3 / MedGemma overflows to NaN in float16 on Turing (T4) GPUs; use
+    bfloat16 when natively supported or float32 otherwise.
+    """
     import torch
+
+    if family == "gemma3":
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+            return torch.bfloat16
+        return torch.float32
+    return torch.float16
+
+
+def _build_bnb_config(compute_dtype: Any) -> Any:
+    """Create 4-bit NF4 BitsAndBytesConfig using the family-safe compute dtype."""
     from transformers import BitsAndBytesConfig
 
     return BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
         bnb_4bit_use_double_quant=True,
-        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_compute_dtype=compute_dtype,
     )
+
+
+def _sanitize_config(config: Any) -> Any:
+    """Ensure config fields like use_cache are valid booleans instead of None."""
+    if getattr(config, "use_cache", None) is None:
+        config.use_cache = True
+    text_cfg = getattr(config, "text_config", None)
+    if text_cfg is not None and getattr(text_cfg, "use_cache", None) is None:
+        text_cfg.use_cache = True
+    return config
 
 
 def _load_model_with_attn_fallback(model_cls: Any, hf_id: str, **kwargs: Any) -> Any:
@@ -119,6 +143,7 @@ class MedicalVLMRunner:
         """Load 4-bit quantized weights and processor into GPU VRAM."""
         import torch
         from transformers import (
+            AutoConfig,
             AutoModelForImageTextToText,
             AutoProcessor,
             LlavaForConditionalGeneration,
@@ -128,17 +153,23 @@ class MedicalVLMRunner:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
-        bnb_cfg = _build_bnb_config()
+        compute_dtype = _select_compute_dtype(self.spec.family)
+        bnb_cfg = _build_bnb_config(compute_dtype)
+        proc_kwargs = {"token": self.hf_token} if self.hf_token else {}
+
+        config = AutoConfig.from_pretrained(self.spec.hf_id, **proc_kwargs)
+        config = _sanitize_config(config)
+
         common_kwargs: dict[str, Any] = {
+            "config": config,
             "quantization_config": bnb_cfg,
-            "torch_dtype": torch.float16,
+            "torch_dtype": compute_dtype,
             "device_map": "auto",
             "low_cpu_mem_usage": True,
         }
         if self.hf_token:
             common_kwargs["token"] = self.hf_token
 
-        proc_kwargs = {"token": self.hf_token} if self.hf_token else {}
         self.processor = AutoProcessor.from_pretrained(self.spec.hf_id, **proc_kwargs)
 
         if self.spec.family == "gemma3":
@@ -161,6 +192,10 @@ class MedicalVLMRunner:
             )
         else:
             raise ValueError(f"Unsupported model family: {self.spec.family}")
+
+        if getattr(self.model, "generation_config", None) is not None:
+            if getattr(self.model.generation_config, "use_cache", None) is None:
+                self.model.generation_config.use_cache = True
 
         self.model.eval()
 
@@ -190,6 +225,7 @@ class MedicalVLMRunner:
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
+                use_cache=True,
             )
             generated_ids = output_ids[0][prompt_len:]
             decoded = self.processor.decode(generated_ids, skip_special_tokens=True).strip()

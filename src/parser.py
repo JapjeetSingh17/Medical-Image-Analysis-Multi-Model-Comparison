@@ -18,17 +18,22 @@ class ParsedPrediction:
 
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", flags=re.DOTALL | re.IGNORECASE)
+_GEMMA_THINK_RE = re.compile(
+    r"<unused94>thought\s*(.*?)<unused95>", flags=re.DOTALL | re.IGNORECASE
+)
 _ANSWER_TAG_RE = re.compile(r"<answer>(.*?)</answer>", flags=re.DOTALL | re.IGNORECASE)
 
 
 def extract_reasoning(raw_text: str) -> tuple[str, str]:
-    """Split optional <think>...</think> reasoning from the remaining answer text."""
-    match = _THINK_RE.search(raw_text or "")
-    if not match:
-        return "", (raw_text or "").strip()
-    reasoning = match.group(1).strip()
-    remainder = _THINK_RE.sub("", raw_text).strip()
-    return reasoning, remainder
+    """Split optional <think> or Gemma thought tokens from the remaining answer text."""
+    text = raw_text or ""
+    for pattern in (_THINK_RE, _GEMMA_THINK_RE):
+        match = pattern.search(text)
+        if match:
+            reasoning = match.group(1).strip()
+            remainder = pattern.sub("", text).strip()
+            return reasoning, remainder
+    return "", text.strip()
 
 
 def _match_letter(candidate: str, valid_letters: set[str]) -> str | None:

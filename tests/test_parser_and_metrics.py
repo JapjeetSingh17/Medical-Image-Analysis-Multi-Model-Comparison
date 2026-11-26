@@ -240,3 +240,18 @@ def test_run_benchmark_skips_failing_gated_model(tmp_path: Path, monkeypatch) ->
     summary = pd.read_csv(results_dir / "summary.csv")
     assert list(summary["model_key"]) == ["medvlm-r1-2b"]
     assert summary.iloc[0]["overall_accuracy_pct"] == 100.0
+
+
+def test_sanitize_config_and_gemma3_dtype() -> None:
+    from types import SimpleNamespace
+    from src.models import _sanitize_config
+
+    cfg = SimpleNamespace(use_cache=None, text_config=SimpleNamespace(use_cache=None))
+    fixed = _sanitize_config(cfg)
+    assert fixed.use_cache is True
+    assert fixed.text_config.use_cache is True
+
+    gemma_raw = "<unused94>thought\nPneumonia infiltrate visible.<unused95><answer>B</answer>"
+    parsed = parse_model_response(gemma_raw, {"A": "Normal", "B": "Pneumonia"})
+    assert parsed.predicted_letter == "B"
+    assert "Pneumonia infiltrate" in parsed.reasoning

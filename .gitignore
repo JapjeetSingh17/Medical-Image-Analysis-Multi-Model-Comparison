@@ -14,3 +14,5 @@ results/raw/
 
 # Keep generated sample/placeholder assets if explicitly added, ignore large downloads
 hf_cache/
+*.zip
+Medical VLM Benchmark.ipynb
