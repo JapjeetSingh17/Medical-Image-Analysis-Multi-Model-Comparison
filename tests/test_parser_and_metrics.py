@@ -180,3 +180,63 @@ def test_save_pil_image_from_zip_filename(tmp_path: Path) -> None:
     with Image.open(out_png) as saved:
         assert saved.mode == "RGB"
         assert saved.size == (32, 32)
+
+
+def test_run_benchmark_skips_failing_gated_model(tmp_path: Path, monkeypatch) -> None:
+    import run_benchmark as rb
+
+    img_dir = tmp_path / "data" / "images"
+    img_dir.mkdir(parents=True)
+    img_path = img_dir / "c1.png"
+    Image.new("RGB", (32, 32), color=(20, 40, 60)).save(img_path)
+
+    manifest_path = tmp_path / "data" / "manifest.csv"
+    pd.DataFrame(
+        [
+            {
+                "case_id": "c1",
+                "source": "MedXpertQA-MM (2025)",
+                "domain": "Skeletal",
+                "medical_task": "Diagnosis",
+                "case_date": "2025",
+                "image_path": str(img_path),
+                "question": "Q?",
+                "options_json": json.dumps({"A": "Opt1", "B": "Opt2"}),
+                "correct_letter": "A",
+                "human_vote_pct": None,
+                "human_plurality_correct": None,
+            }
+        ]
+    ).to_csv(manifest_path, index=False)
+
+    class FakeRunner:
+        def __init__(self, spec, hf_token=None):
+            self.spec = spec
+
+        def load(self):
+            if self.spec.key == "medgemma-1.5-4b":
+                raise OSError("403 Client Error: gated repo")
+
+        def predict(self, image, prompt):
+            return "<answer>A</answer>", 0.5
+
+        def peak_vram_gb(self):
+            return 2.0
+
+        def unload(self):
+            pass
+
+    monkeypatch.setattr(rb, "MedicalVLMRunner", FakeRunner)
+
+    results_dir = tmp_path / "results"
+    rb.run_benchmark(
+        data_dir=tmp_path / "data",
+        results_dir=results_dir,
+        model_keys=["medgemma-1.5-4b", "medvlm-r1-2b"],
+        smoke_test=True,
+        hf_token="dummy-token",
+    )
+
+    summary = pd.read_csv(results_dir / "summary.csv")
+    assert list(summary["model_key"]) == ["medvlm-r1-2b"]
+    assert summary.iloc[0]["overall_accuracy_pct"] == 100.0

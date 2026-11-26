@@ -81,7 +81,20 @@ def run_benchmark(
 
         print(f"\n=== Loading {spec.display_name} ({spec.hf_id}) ===")
         runner = MedicalVLMRunner(spec, hf_token=token)
-        runner.load()
+        try:
+            runner.load()
+        except Exception as exc:
+            print(
+                f"[SKIP] Could not load {spec.display_name} ({spec.hf_id}): {exc}\n"
+                + (
+                    f"       Make sure you accepted the license at https://huggingface.co/{spec.hf_id} "
+                    "with the same HF account as your HF_TOKEN."
+                    if spec.gated
+                    else ""
+                )
+            )
+            runner.unload()
+            continue
 
         with out_jsonl.open("a", encoding="utf-8") as fh:
             for _, row in tqdm(pending.iterrows(), total=len(pending), desc=spec.key):
