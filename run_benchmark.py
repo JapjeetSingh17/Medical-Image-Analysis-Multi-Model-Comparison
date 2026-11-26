@@ -105,7 +105,9 @@ def run_benchmark(
                     uses_think_tags=spec.uses_think_tags,
                 )
                 img = Image.open(row["image_path"]).convert("RGB")
-                raw_resp, latency = runner.predict(img, prompt)
+                raw_resp, latency = runner.predict(
+                    img, prompt, max_new_tokens=spec.max_new_tokens
+                )
                 parsed = parse_model_response(raw_resp, options)
 
                 record: dict[str, Any] = {

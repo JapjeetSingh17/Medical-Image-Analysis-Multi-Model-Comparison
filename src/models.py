@@ -22,6 +22,7 @@ class ModelSpec:
     params_label: str
     gated: bool
     uses_think_tags: bool = False
+    max_new_tokens: int = 96
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
@@ -32,6 +33,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         family="gemma3",
         params_label="4B",
         gated=True,
+        max_new_tokens=48,
     ),
     "llava-med-7b": ModelSpec(
         key="llava-med-7b",
@@ -40,6 +42,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         family="llava",
         params_label="7B",
         gated=False,
+        max_new_tokens=96,
     ),
     "medvlm-r1-2b": ModelSpec(
         key="medvlm-r1-2b",
@@ -49,6 +52,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         params_label="2B",
         gated=False,
         uses_think_tags=True,
+        max_new_tokens=220,
     ),
     "qwen2.5-vl-3b-medsft": ModelSpec(
         key="qwen2.5-vl-3b-medsft",
@@ -57,6 +61,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         family="qwen2_5_vl",
         params_label="3B",
         gated=False,
+        max_new_tokens=96,
     ),
 }
 
@@ -77,8 +82,8 @@ def build_clinical_prompt(
     else:
         instruction = (
             "Analyze the medical image and clinical question carefully. "
-            "Provide a brief clinical justification (1-2 sentences), and end with the "
-            "single best option letter inside <answer>...</answer> tags (e.g., <answer>B</answer>)."
+            "Output ONLY the single best option letter inside <answer>...</answer> tags first "
+            "(e.g., <answer>B</answer>), followed by a concise 1-sentence justification."
         )
     return f"{instruction}\n\nQuestion:\n{question}\n\nOptions:\n{opts_text}"
 

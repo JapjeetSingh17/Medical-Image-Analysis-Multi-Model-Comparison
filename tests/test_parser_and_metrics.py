@@ -217,7 +217,7 @@ def test_run_benchmark_skips_failing_gated_model(tmp_path: Path, monkeypatch) ->
             if self.spec.key == "medgemma-1.5-4b":
                 raise OSError("403 Client Error: gated repo")
 
-        def predict(self, image, prompt):
+        def predict(self, image, prompt, max_new_tokens=96):
             return "<answer>A</answer>", 0.5
 
         def peak_vram_gb(self):
